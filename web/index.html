@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Satisfactory Visual Planner</title>
+  <link rel="stylesheet" href="/web/styles.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <aside class="left-panel">
+      <h1>Factory Planner</h1>
+      <label for="itemInput">Item</label>
+      <input id="itemInput" list="itemsList" value="Wire">
+      <datalist id="itemsList"></datalist>
+
+      <label for="rateInput">Items per minute</label>
+      <input id="rateInput" type="number" min="0.0001" step="0.1" placeholder="Optional">
+
+      <label for="strategyInput">Recipe strategy</label>
+      <select id="strategyInput">
+        <option value="default">Default recipes</option>
+        <option value="custom">Custom choices</option>
+      </select>
+
+      <label for="clockInput">Clock speed</label>
+      <select id="clockInput">
+        <option value="50">50%</option>
+        <option value="100" selected>100%</option>
+        <option value="250">250%</option>
+        <option value="custom">Custom</option>
+      </select>
+      <input id="customClockInput" class="hidden" type="number" min="1" max="250" step="1" value="100">
+
+      <button id="calculateButton">Calculate</button>
+      <div id="error" class="error"></div>
+
+      <h2>Manual Recipe Choice</h2>
+      <label for="choiceItem">Item</label>
+      <input id="choiceItem" list="itemsList" placeholder="Screw">
+      <label for="choiceRecipe">Recipe</label>
+      <select id="choiceRecipe"></select>
+      <button id="addChoiceButton" class="secondary">Add Choice</button>
+      <div id="choices"></div>
+    </aside>
+
+    <div id="leftSplitter" class="splitter"></div>
+
+    <main id="graphShell" class="graph-shell">
+      <div id="graph" class="graph">
+        <svg id="edges" class="edges"></svg>
+      </div>
+    </main>
+
+    <div id="rightSplitter" class="splitter"></div>
+
+    <aside class="right-panel">
+      <h2>Output</h2>
+      <div id="outputRate" class="summary"></div>
+      <h2>Machines</h2>
+      <div id="machines" class="summary"></div>
+      <h2>Power</h2>
+      <div id="power" class="summary"></div>
+      <h2>Transport</h2>
+      <div id="transport" class="summary"></div>
+      <h2>Raw Resources</h2>
+      <div id="resources" class="summary"></div>
+      <h2>Selected Recipes</h2>
+      <div id="selectedRecipes" class="summary"></div>
+    </aside>
+  </div>
+
+  <aside id="recipeDrawer" class="recipe-drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <div>
+        <span class="eyebrow">Recipes</span>
+        <h2 id="drawerTitle">Select Recipe</h2>
+      </div>
+      <button id="closeDrawerButton" class="icon-button" title="Close">x</button>
+    </div>
+    <div id="recipeCards" class="recipe-cards"></div>
+  </aside>
+
+  <script src="/web/app.js"></script>
+</body>
+</html>
