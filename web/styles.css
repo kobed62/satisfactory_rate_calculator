@@ -128,6 +128,37 @@ button.secondary,
   margin-top: 8px;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  width: auto;
+  padding: 0;
+}
+
+.unlock-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 10px;
+}
+
+.unlock-grid + .unlock-grid {
+  margin-top: 4px;
+}
+
+.unlock-grid .checkbox-row {
+  margin-top: 8px;
+}
+
+.checkbox-row input:disabled + span {
+  color: #7d7363;
+}
+
 .hidden {
   display: none;
 }
@@ -140,12 +171,69 @@ button.secondary,
     linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px),
     #15130f;
   background-size: 32px 32px;
+  cursor: grab;
+}
+
+.graph-shell.panning {
+  cursor: grabbing;
+}
+
+.graph-toolbar {
+  position: sticky;
+  top: 12px;
+  left: 12px;
+  z-index: 15;
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(28, 26, 22, 0.92);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+
+.toolbar-button {
+  width: auto;
+  min-width: 48px;
+  height: 34px;
+  padding: 0 10px;
+  margin: 0;
+}
+
+.graph-toolbar .icon-button {
+  margin: 0;
+}
+
+.graph-notice {
+  position: sticky;
+  top: 60px;
+  left: 12px;
+  z-index: 14;
+  max-width: min(520px, 70vw);
+  margin: 8px 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(28, 26, 22, 0.94);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+
+.graph-notice.warning {
+  border-color: var(--accent);
+  color: var(--accent-2);
+}
+
+.graph-notice.error {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .graph {
   position: relative;
   width: 1800px;
   min-height: 1100px;
+  transform-origin: 0 0;
 }
 
 svg.edges {
@@ -167,6 +255,10 @@ svg.edges {
   box-shadow: 0 10px 24px rgba(0,0,0,0.35);
   cursor: grab;
   user-select: none;
+}
+
+.node input {
+  cursor: text;
 }
 
 .node:hover {

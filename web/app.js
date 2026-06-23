@@ -4,8 +4,13 @@ const state = {
   graph: null,
   effectiveGraph: null,
   resourceInputs: {},
+  nodeClocks: {},
   positions: {},
+  manualPositions: {},
+  planKey: "",
   draggedNode: null,
+  panning: null,
+  zoom: 1,
   panelWidths: {left: 340, right: 320},
   pointerMoved: false,
 };
@@ -15,19 +20,25 @@ const itemInput = document.getElementById("itemInput");
 const rateInput = document.getElementById("rateInput");
 const strategyInput = document.getElementById("strategyInput");
 const clockInput = document.getElementById("clockInput");
-const customClockInput = document.getElementById("customClockInput");
+const simplifyRatiosInput = document.getElementById("simplifyRatiosInput");
+const transportUnlockInputs = [...document.querySelectorAll("[data-transport][data-tier]")];
 const errorBox = document.getElementById("error");
 const choiceItem = document.getElementById("choiceItem");
 const choiceRecipe = document.getElementById("choiceRecipe");
 const choices = document.getElementById("choices");
 const graphEl = document.getElementById("graph");
+const graphShell = document.getElementById("graphShell");
 const edgesEl = document.getElementById("edges");
+const graphNotice = document.getElementById("graphNotice");
 const recipeDrawer = document.getElementById("recipeDrawer");
 const drawerTitle = document.getElementById("drawerTitle");
 const recipeCards = document.getElementById("recipeCards");
+const POWER_CLOCK_EXPONENT = 1.321928;
+const POSITION_LAYOUT_VERSION = 2;
 
 async function init() {
   setupPanelResize();
+  setupGraphNavigation();
   const savedWidths = JSON.parse(localStorage.getItem("panelWidths") || "null");
   if (savedWidths) {
     state.panelWidths = savedWidths;
@@ -54,6 +65,7 @@ async function fetchJson(url, options) {
 
 async function calculate() {
   errorBox.textContent = "";
+  showGraphNotice("");
   try {
     const rateValue = rateInput.value.trim();
     const payload = {
@@ -63,6 +75,12 @@ async function calculate() {
       recipe_choices: state.choices,
       clock_percent: selectedClockPercent(),
     };
+    const nextPlanKey = planKeyForPayload(payload);
+    if (state.planKey && state.planKey !== nextPlanKey) {
+      state.nodeClocks = {};
+    }
+    state.planKey = nextPlanKey;
+    state.manualPositions = loadManualPositions(state.planKey);
     const graph = await fetchJson("/api/calculate", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -72,14 +90,56 @@ async function calculate() {
     syncResourceInputs(graph);
     renderCalculatedView();
   } catch (error) {
-    errorBox.textContent = error.message;
+    const message = friendlyErrorMessage(error.message);
+    errorBox.textContent = message;
+    state.graph = null;
+    state.effectiveGraph = null;
+    renderGraph(null);
+    renderOutputRate({item: itemInput.value, numbers_visible: false});
+    renderSummary("machines", {});
+    renderPower({numbers_visible: false});
+    renderTransport({numbers_visible: false});
+    renderSummary("resources", {});
+    renderSummary("selectedRecipes", {});
+    showGraphNotice(message, "error");
   }
+}
+
+function planKeyForPayload(payload) {
+  const sortedChoices = Object.fromEntries(
+    Object.entries(payload.recipe_choices || {}).sort(([left], [right]) => left.localeCompare(right))
+  );
+  return JSON.stringify({
+    item: String(payload.item || "").trim().toLowerCase(),
+    rate: payload.rate ?? null,
+    strategy: payload.strategy,
+    recipe_choices: sortedChoices,
+  });
+}
+
+function positionStorageKey(planKey) {
+  return `factoryPlanner.positions.v${POSITION_LAYOUT_VERSION}.${planKey}`;
+}
+
+function loadManualPositions(planKey) {
+  if (!planKey) return {};
+  try {
+    return JSON.parse(localStorage.getItem(positionStorageKey(planKey)) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveManualPositions() {
+  if (!state.planKey) return;
+  localStorage.setItem(positionStorageKey(state.planKey), JSON.stringify(state.manualPositions));
 }
 
 function renderCalculatedView() {
   const graph = graphForDisplay();
   state.effectiveGraph = graph;
   renderGraph(graph);
+  renderGraphWarnings(graph);
   renderOutputRate(graph);
   renderSummary("machines", graph.numbers_visible ? graph.machines : {});
   renderPower(graph);
@@ -88,10 +148,38 @@ function renderCalculatedView() {
   renderSummary("selectedRecipes", graph.selected_recipes);
 }
 
-function selectedClockPercent() {
-  if (clockInput.value === "custom") {
-    return Number(customClockInput.value) || 100;
+function friendlyErrorMessage(message) {
+  if (message.includes("Unknown item")) {
+    return "Unknown item. Check the spelling or choose an item from the list.";
   }
+  if (message.includes("No recipe found")) {
+    return "No usable recipe found for this item with the current data.";
+  }
+  if (message.includes("Recipe cycle detected") || message.includes("No cycle-free recipe")) {
+    return "This recipe choice creates a production cycle. Try a different recipe in the drawer.";
+  }
+  return message || "Something went wrong while calculating this plan.";
+}
+
+function showGraphNotice(message, type = "info") {
+  graphNotice.textContent = message;
+  graphNotice.className = message ? `graph-notice ${type}` : "graph-notice hidden";
+}
+
+function renderGraphWarnings(graph) {
+  if (!graph) return;
+  const warnings = [];
+  if ((graph.missing_icons || []).length) {
+    warnings.push(`${graph.missing_icons.length} item icon${graph.missing_icons.length === 1 ? "" : "s"} missing.`);
+  }
+  const heavyEdges = (graph.edges || []).filter(edge => Number(edge.transport_hint?.lines || 0) > 1);
+  if (heavyEdges.length) {
+    warnings.push(`${heavyEdges.length} connection${heavyEdges.length === 1 ? "" : "s"} need multiple transport lines.`);
+  }
+  showGraphNotice(warnings.join(" "), warnings.length ? "warning" : ""); 
+}
+
+function selectedClockPercent() {
   return Number(clockInput.value);
 }
 
@@ -140,7 +228,7 @@ function syncResourceInputs(graph) {
 
 function graphForDisplay() {
   if (!state.graph || state.graph.mode !== "input_limits") {
-    return state.graph;
+    return state.graph ? withNodeClocks(withUnlockedTransport(state.graph)) : state.graph;
   }
 
   const graph = state.graph;
@@ -177,7 +265,7 @@ function graphForDisplay() {
   );
   const scaledEdges = scaleEdges(graph.edges, scale);
 
-  return {
+  return withNodeClocks({
     ...graph,
     rate: cleanNumber(scale),
     numbers_visible: true,
@@ -187,6 +275,15 @@ function graphForDisplay() {
     resources: Object.fromEntries(requiredNames.map(name => [name, cleanNumber(inputRates[name])])),
     nodes: graph.nodes.map(node => scaleNode(node, scale, inputRates)),
     edges: scaledEdges,
+  });
+}
+
+function withUnlockedTransport(graph) {
+  const edges = applyTransportUnlocks(graph.edges || []);
+  return {
+    ...graph,
+    edges,
+    transport: transportSummary(edges),
   };
 }
 
@@ -202,10 +299,55 @@ function scaleNode(node, scale, inputRates) {
   return {
     ...node,
     rate: cleanNumber(Number(node.rate) * scale),
+    base_machine_count: cleanNumber(Number(node.base_machine_count || node.machine_count) * scale),
     machine_count: cleanNumber(machineCount),
     display_machine_count: Math.max(1, Math.ceil(machineCount)),
     power_mw: cleanNumber(Number(node.power_mw || 0) * scale),
   };
+}
+
+function withNodeClocks(graph) {
+  if (!graph.numbers_visible) return graph;
+
+  const machines = {};
+  const powerByBuilding = {};
+  const nodes = (graph.nodes || []).map(node => {
+    if (node.type === "resource") return node;
+    const clockPercent = nodeClockPercent(node);
+    const baseMachineCount = Number(node.base_machine_count || node.machine_count || 0);
+    const machineCount = baseMachineCount / (clockPercent / 100);
+    const powerMw = nodeBasePowerUsage(node) * machineCount * ((clockPercent / 100) ** POWER_CLOCK_EXPONENT);
+    machines[node.building] = (machines[node.building] || 0) + machineCount;
+    powerByBuilding[node.building] = (powerByBuilding[node.building] || 0) + powerMw;
+    return {
+      ...node,
+      clock_percent: cleanNumber(clockPercent),
+      machine_count: cleanNumber(machineCount),
+      display_machine_count: Math.max(1, Math.ceil(machineCount)),
+      power_mw: cleanNumber(powerMw),
+    };
+  });
+
+  return {
+    ...graph,
+    nodes,
+    machines: cleanTotals(machines),
+    power: {
+      total_mw: cleanNumber(Object.values(powerByBuilding).reduce((total, value) => total + value, 0)),
+      by_building: cleanTotals(powerByBuilding),
+    },
+  };
+}
+
+function nodeClockPercent(node) {
+  return Number(state.nodeClocks[node.id] || node.clock_percent || selectedClockPercent());
+}
+
+function nodeBasePowerUsage(node) {
+  const machineCount = Number(node.machine_count || 0);
+  const clockFactor = Number(node.clock_percent || 100) / 100;
+  if (!machineCount || !clockFactor) return 0;
+  return Number(node.power_mw || 0) / (machineCount * (clockFactor ** POWER_CLOCK_EXPONENT));
 }
 
 function scaleTotals(values, scale) {
@@ -230,7 +372,20 @@ function scaleEdges(edges, scale) {
       transport_hint: transportHint(edge.transport_type, rate),
     };
   });
-  return scaledEdges;
+  return applyTransportUnlocks(scaledEdges);
+}
+
+function applyTransportUnlocks(edges) {
+  return (edges || []).map(edge => {
+    if (edge.rate === null || edge.rate === "") {
+      return edge;
+    }
+    const rate = Number(edge.rate);
+    return {
+      ...edge,
+      transport_hint: transportHint(edge.transport_type, rate),
+    };
+  });
 }
 
 function transportSummary(edges) {
@@ -243,9 +398,7 @@ function transportSummary(edges) {
 }
 
 function transportHint(transportType, rate) {
-  const capacities = transportType === "belt"
-    ? [["Mk.1 belt", 60], ["Mk.2 belt", 120], ["Mk.3 belt", 270], ["Mk.4 belt", 480], ["Mk.5 belt", 780], ["Mk.6 belt", 1200]]
-    : [["Pipe Mk.1", 300], ["Pipe Mk.2", 600]];
+  const capacities = unlockedTransportCapacities(transportType);
   for (const [standard, capacity] of capacities) {
     if (rate <= capacity) {
       return {standard, capacity, lines: 1, rate_per_line: cleanNumber(rate)};
@@ -256,10 +409,33 @@ function transportHint(transportType, rate) {
   return {standard, capacity, lines, rate_per_line: cleanNumber(rate / lines)};
 }
 
+function unlockedTransportCapacities(transportType) {
+  const type = transportType === "belt" ? "belt" : "pipe";
+  const allCapacities = type === "belt"
+    ? [["Mk.1 belt", 60], ["Mk.2 belt", 120], ["Mk.3 belt", 270], ["Mk.4 belt", 480], ["Mk.5 belt", 780], ["Mk.6 belt", 1200]]
+    : [["Pipe Mk.1", 300], ["Pipe Mk.2", 600]];
+  const highestTier = Math.max(
+    1,
+    ...transportUnlockInputs
+      .filter(input => input.dataset.transport === type && input.checked)
+      .map(input => Number(input.dataset.tier))
+  );
+  return allCapacities.slice(0, highestTier);
+}
+
 function cleanNumber(value) {
   if (!Number.isFinite(value)) return "";
   if (Math.abs(value - Math.round(value)) < 1e-9) return Math.round(value);
   return Number(value.toFixed(4));
+}
+
+function cleanTotals(values) {
+  return Object.fromEntries(
+    Object.entries(values || {})
+      .filter(([, value]) => Math.abs(Number(value)) > 1e-9)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, cleanNumber(Number(value))])
+  );
 }
 
 async function loadRecipesForChoice() {
@@ -317,8 +493,9 @@ function renderGraph(graph) {
   edgesEl.innerHTML = "";
   if (!graph) return;
 
-  state.positions = layoutNodes(graph.nodes, graph.edges);
+  state.positions = positionsForGraph(graph.nodes, graph.edges, graph.item);
   updateGraphBounds();
+  applyGraphView();
 
   for (const node of graph.nodes) {
     const pos = state.positions[node.id];
@@ -345,6 +522,9 @@ function renderGraph(graph) {
     const powerLine = hasNumbers && node.type !== "resource" && node.power_mw
       ? `<div>${escapeHtml(node.power_mw)} MW @ ${escapeHtml(node.clock_percent)}%</div>`
       : "";
+    const clockControl = hasNumbers && node.type !== "resource"
+      ? nodeClockControl(node)
+      : "";
     nodeEl.innerHTML = `
       <div class="node-header">
         ${icon}
@@ -355,6 +535,7 @@ function renderGraph(graph) {
         <div>${escapeHtml(machineLine)}</div>
         ${powerLine}
         <div>${escapeHtml(node.recipe || "")}</div>
+        ${clockControl}
         ${resourceInput}
       </div>
     `;
@@ -368,7 +549,43 @@ function renderGraph(graph) {
       renderCalculatedView();
     });
   });
+  graphEl.querySelectorAll(".node-clock-input").forEach(input => {
+    input.addEventListener("change", () => {
+      if (input.value) {
+        state.nodeClocks[input.dataset.nodeId] = Number(input.value);
+      } else {
+        delete state.nodeClocks[input.dataset.nodeId];
+      }
+      renderCalculatedView();
+    });
+  });
   renderEdges();
+}
+
+function positionsForGraph(nodes, edges, targetItem) {
+  const positions = layoutNodes(nodes, edges, targetItem);
+  for (const node of nodes) {
+    const savedPosition = state.manualPositions[node.id];
+    if (savedPosition && Number.isFinite(savedPosition.x) && Number.isFinite(savedPosition.y)) {
+      positions[node.id] = savedPosition;
+    }
+  }
+  return positions;
+}
+
+function nodeClockControl(node) {
+  const overrideValue = state.nodeClocks[node.id] ? String(state.nodeClocks[node.id]) : "";
+  return `
+    <label class="resource-input-label">
+      <span>Clock %</span>
+      <select class="node-clock-input" data-node-id="${escapeHtml(node.id)}">
+        <option value="" ${overrideValue === "" ? "selected" : ""}>Default (${escapeHtml(selectedClockPercent())}%)</option>
+        <option value="50" ${overrideValue === "50" ? "selected" : ""}>50%</option>
+        <option value="100" ${overrideValue === "100" ? "selected" : ""}>100%</option>
+        <option value="250" ${overrideValue === "250" ? "selected" : ""}>250%</option>
+      </select>
+    </label>
+  `;
 }
 
 function resourceInputControl(resourceName) {
@@ -409,8 +626,78 @@ function renderEdges() {
     text.setAttribute("dominant-baseline", "middle");
     const hint = edge.transport_hint;
     const transportText = hint ? ` - ${hint.lines}x ${hint.standard}` : "";
-    text.textContent = edge.rate === null || edge.rate === "" ? "" : `${edge.rate}/min${transportText}`;
+    const ratioText = flowRatioText(edge);
+    text.textContent = edge.rate === null || edge.rate === "" ? "" : `${edge.rate}/min${transportText}${ratioText}`;
     edgesEl.appendChild(text);
+  }
+}
+
+function flowRatioText(edge) {
+  const parts = [];
+  if (edge.split_ratio) {
+    parts.push(`split ${formatRatio(edge.split_ratio)}`);
+  }
+  if (edge.merge_ratio) {
+    parts.push(`merge ${formatRatio(edge.merge_ratio)}`);
+  }
+  return parts.length ? ` - ${parts.join(" - ")}` : "";
+}
+
+function formatRatio(ratio) {
+  if (!simplifyRatiosInput.checked) {
+    return ratio.fraction;
+  }
+  return approximateFraction(Number(ratio.part), Number(ratio.total_parts), 10);
+}
+
+function approximateFraction(numerator, denominator, maxPart) {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+    return "";
+  }
+
+  const target = numerator / denominator;
+  let bestNumerator = 0;
+  let bestDenominator = 1;
+  let bestError = Infinity;
+
+  for (let candidateDenominator = 1; candidateDenominator <= maxPart; candidateDenominator += 1) {
+    for (let candidateNumerator = 0; candidateNumerator <= maxPart; candidateNumerator += 1) {
+      const value = candidateNumerator / candidateDenominator;
+      const error = Math.abs(value - target);
+      if (error < bestError) {
+        bestNumerator = candidateNumerator;
+        bestDenominator = candidateDenominator;
+        bestError = error;
+      }
+    }
+  }
+
+  const divisor = gcd(bestNumerator, bestDenominator);
+  return `${bestNumerator / divisor}/${bestDenominator / divisor}`;
+}
+
+function gcd(a, b) {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y) {
+    const next = x % y;
+    x = y;
+    y = next;
+  }
+  return x || 1;
+}
+
+function syncTransportUnlocks(changedInput) {
+  const type = changedInput.dataset.transport;
+  const tier = Number(changedInput.dataset.tier);
+  for (const input of transportUnlockInputs.filter(candidate => candidate.dataset.transport === type)) {
+    const inputTier = Number(input.dataset.tier);
+    if (changedInput.checked && inputTier < tier) {
+      input.checked = true;
+    }
+    if (!changedInput.checked && inputTier > tier) {
+      input.checked = false;
+    }
   }
 }
 
@@ -452,6 +739,10 @@ function makeNodeInteractive(nodeEl) {
   nodeEl.addEventListener("pointerup", () => {
     nodeEl.classList.remove("dragging");
     const shouldOpen = !state.pointerMoved && nodeEl.dataset.type !== "resource";
+    if (state.pointerMoved && state.draggedNode) {
+      state.manualPositions[state.draggedNode.id] = state.positions[state.draggedNode.id];
+      saveManualPositions();
+    }
     state.draggedNode = null;
     if (shouldOpen) {
       openRecipeDrawer(nodeEl.dataset.label);
@@ -462,8 +753,8 @@ function makeNodeInteractive(nodeEl) {
 function graphPointer(event) {
   const rect = graphEl.getBoundingClientRect();
   return {
-    x: event.clientX - rect.left,
-    y: event.clientY - rect.top,
+    x: (event.clientX - rect.left) / state.zoom,
+    y: (event.clientY - rect.top) / state.zoom,
   };
 }
 
@@ -475,19 +766,24 @@ async function openRecipeDrawer(itemName) {
 
   try {
     const recipes = await fetchJson(`/api/recipes?item=${encodeURIComponent(itemName)}`);
-    recipeCards.innerHTML = recipes.map(recipe => recipeCard(itemName, recipe)).join("");
-    recipeCards.querySelectorAll("button[data-recipe]").forEach(button => {
-      button.addEventListener("click", () => {
-        setRecipeChoice(itemName, button.dataset.recipe);
-      });
-    });
+    renderRecipeCards(itemName, recipes);
   } catch (error) {
     recipeCards.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
   }
 }
 
+function renderRecipeCards(itemName, recipes) {
+  recipeCards.innerHTML = recipes.map(recipe => recipeCard(itemName, recipe)).join("");
+  recipeCards.querySelectorAll("button[data-recipe]").forEach(button => {
+    button.addEventListener("click", () => {
+      setRecipeChoice(itemName, button.dataset.recipe);
+      renderRecipeCards(itemName, recipes);
+    });
+  });
+}
+
 function recipeCard(itemName, recipe) {
-  const activeRecipe = state.graph?.selected_recipes?.[itemName];
+  const activeRecipe = state.choices[itemName] || state.graph?.selected_recipes?.[itemName];
   const isActive = activeRecipe === recipe.name;
   const badgeClass = recipe.alternate ? "badge" : "badge default";
   const badgeText = recipe.alternate ? "Alternate" : "Default";
@@ -565,6 +861,85 @@ function applyPanelWidths() {
   setTimeout(renderEdges, 0);
 }
 
+function setupGraphNavigation() {
+  document.getElementById("zoomInButton").addEventListener("click", () => setZoom(state.zoom * 1.2));
+  document.getElementById("zoomOutButton").addEventListener("click", () => setZoom(state.zoom / 1.2));
+  document.getElementById("fitGraphButton").addEventListener("click", fitGraph);
+  document.getElementById("resetViewButton").addEventListener("click", resetGraphView);
+
+  graphShell.addEventListener("wheel", event => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    const nextZoom = state.zoom * (event.deltaY < 0 ? 1.1 : 0.9);
+    setZoom(nextZoom, event.clientX, event.clientY);
+  }, {passive: false});
+
+  graphShell.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || event.target.closest(".node, button, input, select")) return;
+    state.panning = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: graphShell.scrollLeft,
+      scrollTop: graphShell.scrollTop,
+    };
+    graphShell.classList.add("panning");
+    graphShell.setPointerCapture(event.pointerId);
+  });
+
+  graphShell.addEventListener("pointermove", event => {
+    if (!state.panning) return;
+    graphShell.scrollLeft = state.panning.scrollLeft - (event.clientX - state.panning.startX);
+    graphShell.scrollTop = state.panning.scrollTop - (event.clientY - state.panning.startY);
+  });
+
+  graphShell.addEventListener("pointerup", event => {
+    if (!state.panning || state.panning.pointerId !== event.pointerId) return;
+    state.panning = null;
+    graphShell.classList.remove("panning");
+  });
+}
+
+function setZoom(nextZoom, anchorX = null, anchorY = null) {
+  const previousZoom = state.zoom;
+  state.zoom = Math.min(2.4, Math.max(0.35, nextZoom));
+  if (state.zoom === previousZoom) return;
+
+  const rect = graphShell.getBoundingClientRect();
+  const localX = anchorX === null ? rect.width / 2 : anchorX - rect.left;
+  const localY = anchorY === null ? rect.height / 2 : anchorY - rect.top;
+  const graphX = (graphShell.scrollLeft + localX) / previousZoom;
+  const graphY = (graphShell.scrollTop + localY) / previousZoom;
+  applyGraphView();
+  graphShell.scrollLeft = graphX * state.zoom - localX;
+  graphShell.scrollTop = graphY * state.zoom - localY;
+}
+
+function applyGraphView() {
+  graphEl.style.zoom = state.zoom;
+  renderEdges();
+}
+
+function fitGraph() {
+  const bounds = graphBounds(state.positions);
+  const rect = graphShell.getBoundingClientRect();
+  const nextZoom = Math.min(1.4, Math.max(0.35, Math.min(
+    (rect.width - 80) / bounds.width,
+    (rect.height - 80) / bounds.height
+  )));
+  state.zoom = nextZoom;
+  applyGraphView();
+  graphShell.scrollLeft = 0;
+  graphShell.scrollTop = 0;
+}
+
+function resetGraphView() {
+  state.zoom = 1;
+  applyGraphView();
+  graphShell.scrollLeft = 0;
+  graphShell.scrollTop = 0;
+}
+
 function updateGraphBounds() {
   const graphSize = graphBounds(state.positions);
   graphEl.style.width = `${graphSize.width}px`;
@@ -580,27 +955,50 @@ function graphBounds(positions) {
   };
 }
 
-function layoutNodes(nodes, edges) {
-  const incoming = new Map(nodes.map(node => [node.id, []]));
+function layoutNodes(nodes, edges, targetItem) {
+  const outgoing = new Map(nodes.map(node => [node.id, []]));
   for (const edge of edges) {
-    incoming.get(edge.target)?.push(edge.source);
+    outgoing.get(edge.source)?.push(edge.target);
   }
 
-  const depthMemo = {};
-  function depth(id) {
-    if (depthMemo[id] !== undefined) return depthMemo[id];
-    const parents = incoming.get(id) || [];
-    if (!parents.length) {
-      depthMemo[id] = 0;
+  const targetIds = new Set(
+    nodes
+      .filter(node => node.type !== "resource" && node.label === targetItem)
+      .map(node => node.id)
+  );
+  if (!targetIds.size) {
+    for (const node of nodes) {
+      if ((outgoing.get(node.id) || []).length === 0) {
+        targetIds.add(node.id);
+      }
+    }
+  }
+
+  const distanceMemo = {};
+  function distanceToTarget(id, path = []) {
+    if (distanceMemo[id] !== undefined) return distanceMemo[id];
+    if (targetIds.has(id)) {
+      distanceMemo[id] = 0;
       return 0;
     }
-    depthMemo[id] = Math.max(...parents.map(depth)) + 1;
-    return depthMemo[id];
+    if (path.includes(id)) {
+      distanceMemo[id] = 0;
+      return 0;
+    }
+    const children = outgoing.get(id) || [];
+    if (!children.length) {
+      distanceMemo[id] = 0;
+      return 0;
+    }
+    distanceMemo[id] = Math.max(...children.map(childId => distanceToTarget(childId, [...path, id]))) + 1;
+    return distanceMemo[id];
   }
 
+  const distances = Object.fromEntries(nodes.map(node => [node.id, distanceToTarget(node.id)]));
+  const maxDistance = Math.max(0, ...Object.values(distances));
   const columns = {};
   for (const node of nodes) {
-    const d = depth(node.id);
+    const d = maxDistance - distances[node.id];
     columns[d] = columns[d] || [];
     columns[d].push(node);
   }
@@ -629,10 +1027,15 @@ document.getElementById("calculateButton").addEventListener("click", calculate);
 document.getElementById("addChoiceButton").addEventListener("click", addChoice);
 document.getElementById("closeDrawerButton").addEventListener("click", closeRecipeDrawer);
 clockInput.addEventListener("change", () => {
-  customClockInput.classList.toggle("hidden", clockInput.value !== "custom");
   calculate();
 });
-customClockInput.addEventListener("change", calculate);
+simplifyRatiosInput.addEventListener("change", renderEdges);
+transportUnlockInputs.forEach(input => {
+  input.addEventListener("change", () => {
+    syncTransportUnlocks(input);
+    renderCalculatedView();
+  });
+});
 choiceItem.addEventListener("change", loadRecipesForChoice);
 itemInput.addEventListener("change", () => {
   choiceItem.value = itemInput.value;

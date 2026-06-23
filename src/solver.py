@@ -1,4 +1,4 @@
-from math import ceil, isclose
+from math import ceil, gcd, isclose
 from pathlib import Path
 
 try:
@@ -351,16 +351,19 @@ class Planner:
                     }
                 )
 
+        edges = [
+            self._edge_with_transport_hint(edge)
+            for edge in edges_by_key.values()
+        ]
+        edges = _with_flow_ratios(edges)
+
         return {
             "item": result["item"],
             "rate": result["rate"],
             "strategy": result["strategy"],
             "clock_percent": _clean_number(clock_percent),
             "nodes": nodes,
-            "edges": [
-                self._edge_with_transport_hint(edge)
-                for edge in edges_by_key.values()
-            ],
+            "edges": edges,
             "machines": _clean_totals(machine_totals),
             "resources": result["resources"],
             "power": {
@@ -814,6 +817,54 @@ def _transport_hint(transport_type: str, rate: float) -> dict[str, int | float |
         "lines": lines,
         "rate_per_line": _clean_number(rate / lines),
     }
+
+
+def _with_flow_ratios(edges: list[dict[str, object]]) -> list[dict[str, object]]:
+    annotated_edges = [dict(edge) for edge in edges]
+    _annotate_ratio_group(annotated_edges, "split_ratio", ("source", "item"))
+    _annotate_ratio_group(annotated_edges, "merge_ratio", ("target", "item"))
+    return annotated_edges
+
+
+def _annotate_ratio_group(
+    edges: list[dict[str, object]],
+    ratio_key: str,
+    group_keys: tuple[str, str],
+) -> None:
+    groups: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for edge in edges:
+        group = (str(edge[group_keys[0]]), str(edge[group_keys[1]]))
+        groups.setdefault(group, []).append(edge)
+
+    for group_edges in groups.values():
+        if len(group_edges) < 2:
+            continue
+
+        rates = [float(edge["rate"]) for edge in group_edges]
+        ratio_parts = _ratio_parts(rates)
+        ratio_text = ":".join(str(part) for part in ratio_parts)
+        total_rate = sum(rates)
+        for edge, ratio_part in zip(group_edges, ratio_parts):
+            edge[ratio_key] = {
+                "ratio": ratio_text,
+                "part": ratio_part,
+                "fraction": f"{ratio_part}/{sum(ratio_parts)}",
+                "total_parts": sum(ratio_parts),
+                "count": len(group_edges),
+                "total_rate": _clean_number(total_rate),
+            }
+
+
+def _ratio_parts(values: list[float]) -> list[int]:
+    scaled_values = [max(0, int(round(value * 10000))) for value in values]
+    common_divisor = 0
+    for value in scaled_values:
+        common_divisor = gcd(common_divisor, value)
+
+    if common_divisor == 0:
+        return [0 for _ in values]
+
+    return [value // common_divisor for value in scaled_values]
 
 
 def _node_id(*parts: str) -> str:

@@ -28,9 +28,26 @@
         <option value="50">50%</option>
         <option value="100" selected>100%</option>
         <option value="250">250%</option>
-        <option value="custom">Custom</option>
       </select>
-      <input id="customClockInput" class="hidden" type="number" min="1" max="250" step="1" value="100">
+
+      <label class="checkbox-row" for="simplifyRatiosInput">
+        <input id="simplifyRatiosInput" type="checkbox" checked>
+        <span>Simplify split ratios</span>
+      </label>
+
+      <h2>Unlocked Transport</h2>
+      <div class="unlock-grid" id="beltUnlocks">
+        <label class="checkbox-row"><input type="checkbox" data-transport="belt" data-tier="1" checked disabled><span>Mk.1 belt</span></label>
+        <label class="checkbox-row"><input type="checkbox" data-transport="belt" data-tier="2" checked><span>Mk.2 belt</span></label>
+        <label class="checkbox-row"><input type="checkbox" data-transport="belt" data-tier="3" checked><span>Mk.3 belt</span></label>
+        <label class="checkbox-row"><input type="checkbox" data-transport="belt" data-tier="4" checked><span>Mk.4 belt</span></label>
+        <label class="checkbox-row"><input type="checkbox" data-transport="belt" data-tier="5" checked><span>Mk.5 belt</span></label>
+        <label class="checkbox-row"><input type="checkbox" data-transport="belt" data-tier="6" checked><span>Mk.6 belt</span></label>
+      </div>
+      <div class="unlock-grid" id="pipeUnlocks">
+        <label class="checkbox-row"><input type="checkbox" data-transport="pipe" data-tier="1" checked disabled><span>Pipe Mk.1</span></label>
+        <label class="checkbox-row"><input type="checkbox" data-transport="pipe" data-tier="2" checked><span>Pipe Mk.2</span></label>
+      </div>
 
       <button id="calculateButton">Calculate</button>
       <div id="error" class="error"></div>
@@ -47,6 +64,13 @@
     <div id="leftSplitter" class="splitter"></div>
 
     <main id="graphShell" class="graph-shell">
+      <div class="graph-toolbar">
+        <button id="zoomOutButton" class="icon-button" title="Zoom out">-</button>
+        <button id="zoomInButton" class="icon-button" title="Zoom in">+</button>
+        <button id="fitGraphButton" class="toolbar-button">Fit</button>
+        <button id="resetViewButton" class="toolbar-button">Reset</button>
+      </div>
+      <div id="graphNotice" class="graph-notice hidden"></div>
       <div id="graph" class="graph">
         <svg id="edges" class="edges"></svg>
       </div>
