@@ -4,6 +4,15 @@ A Python command line planner for Satisfactory production chains.
 
 Give it an item and a target rate in items per minute, and it calculates the recipes, buildings, intermediate item rates, and raw resources needed to make it. The output is styled like a terminal factory breakdown, with rounded-up displayed building counts so you know how many Smelters, Constructors, Assemblers, Manufacturers, and so on to build.
 
+## Disclaimer
+
+This is an unofficial fan-made Satisfactory factory planning tool.
+
+Satisfactory and all related game assets, trademarks, names, icons, and
+artwork are the property of Coffee Stain Studios.
+
+This project is not affiliated with or endorsed by Coffee Stain Studios.
+
 ## Current Features
 
 - Parses Satisfactory item, recipe, and building JSON data from `data/`.
@@ -28,7 +37,7 @@ Give it an item and a target rate in items per minute, and it calculates the rec
 Open a terminal in the project root:
 
 ```bash
-cd "c:\Users\kobed\OneDrive - KU Leuven\Documenten\satisfactory_rate_calculator"
+cd "path_to_project"
 ```
 
 Run the program with:
